@@ -1,0 +1,3 @@
+*.pt
+.idea
+data/Main/*.txt

@@ -1,0 +1,208 @@
+from __future__ import division
+import sys
+sys.path.append('../../Include/')
+from Include.VectorOperation import *
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+from Include import vecOpFun
+import random
+import time
+
+class traceImageProduce():
+    def __init__(self,x,sizeFig=1024,time=9,
+                 trainSavePath='../../data/Images/',
+                 labelSavePaht='../../data/Annatations/trace/',
+                 dataNameSavePath='../../data/Main/'):
+        self.parameterInit(sizeFig,time=time)
+        self.traceNum = x
+        self.vecOp=vecOpFun.vecOpration()
+        self.faultDtype=torch.float64
+
+        self.trainSavePath=trainSavePath
+        self.labelSavePath=labelSavePaht
+
+        self.dataName=dataNameSavePath
+    def parameterInit(self,sizeFig,time):
+        self.dimNum=2
+        self.figureWidth=sizeFig
+        self.figureHidth=sizeFig
+        self.noseScale = 1 / sizeFig
+        self.figureTime=time
+        self.quantizedInternal=37.5
+        self.vlim=[100/(self.figureWidth*self.quantizedInternal),200/(self.figureWidth*self.quantizedInternal)]
+        self.alim=[10/(self.figureWidth*self.quantizedInternal),20/(self.figureWidth*self.quantizedInternal)]
+    def traceProduce(self):
+        '''
+        产生极坐标下的航迹信息
+        :returm:
+        '''
+        #产生初始位置信息
+        locOriginal=torch.from_numpy(np.random.uniform(low=[0,0],high=[1,2*np.pi],size=(self.traceNum,self.dimNum)))
+        loc_new=locOriginal
+        #产生速度和加速度信息
+        vOriginal=torch.from_numpy(np.random.uniform(low=[self.vlim[0],0],high=[self.vlim[1],2*np.pi],size=(self.traceNum,self.dimNum)))
+        accOriginal = torch.from_numpy(np.random.uniform(low=[self.alim[0],0],high=[self.alim[1],2*np.pi],size=(self.traceNum,self.dimNum)))
+
+        for iterm in range(1,self.figureTime,1):
+            vOriginal[:, 0:1] = vOriginal[:, 0:1].clamp(self.vlim[0], self.vlim[1])
+            loc_new=self.vecOp.polAdd(pol1=loc_new,pol2=vOriginal)
+            locOriginal=torch.cat((locOriginal,loc_new),0)
+            vOriginal=self.vecOp.polAdd(vOriginal,accOriginal)
+            accOriginal = torch.from_numpy(np.random.uniform(low=[self.alim[0], 0], high=[self.alim[1], 2 * np.pi], size=(self.traceNum, self.dimNum)))
+        return locOriginal
+
+    def pltFucRectangle(self,data,setLim=True):
+        # data=np.random.uniform(1,10,(10,2))
+        left, width = 0.05, 0.90
+        bottom, height = 0.05, 0.90
+        rect_scatter = [left, bottom, width, height]
+        plt.figure(figsize=(10, 10))
+        ax_scatter = plt.axes(rect_scatter)
+        ax_scatter.tick_params(direction='in', top=True, right=True)
+        ax_scatter.scatter(data[:,0], data[:,1],s=3)
+        if setLim:
+            ax_scatter.set_xlim((-1, 1))
+            ax_scatter.set_ylim((-1, 1))
+        plt.show()
+
+    def pltPolar(self,data,colors='red',area=5,cmap='hsv',alpha=0.75,setRlim=True):
+        # data=torch.tensor(data,dtype=torch.float)
+        # data = np.random.uniform(1, 10, (10, 2))
+        colors=np.repeat(20*np.ones(shape=(1)),data.shape[0],axis=0)
+        fig = plt.figure(figsize=(10,10),dpi=200)
+        ax = fig.add_subplot(111, projection='polar')
+        ax.set_theta_zero_location('E')
+        ax.set_thetagrids(np.arange(0.0, 360.0, 180.0))
+        if setRlim:
+            ax.set_rgrids(np.arange(0.0, 1.5, 0.3))
+        if setRlim:
+            ax.set_rlim(0, 1.5)
+        ax.scatter(data[:,1], data[:,0],c=colors, s=area, cmap=cmap, alpha=alpha)
+        plt.show()
+    def valueTracePro(self,num):
+        traceArray=torch.zeros(size=(num,self.figureTime,3),dtype=self.faultDtype)
+        num1=num
+        while(num>0):
+            if(num%50==0):
+                print(1-num/num1)
+            num-=1
+            while True:
+                array=self.traceProduce()
+                array=self.vecOp.pol2car(array)
+                min,_=array.min(dim=0)
+                max, _ = array.max(dim=0)
+                flag1=(max<torch.ones(size=(1,2),dtype=array.dtype))
+                flag2=(min > torch.zeros(size=(1, 2), dtype=array.dtype))
+                flag=torch.tensor((flag1+flag2).sum(),dtype=min.dtype)
+                if(flag==4):
+                    break
+            # print(array.size())
+            array=torch.cat((array, torch.tensor(range(self.figureTime),dtype=array.dtype).resize_(self.figureTime,1) ),dim=1)
+
+            traceArray[num:num+1,:,:]=array
+        return traceArray
+
+    def arrayToImage(self,array):
+
+        arrarNumpy=array.numpy()
+        meetConditionDir=np.where(arrarNumpy<0)
+        arrarNumpy=np.delete(arrarNumpy, meetConditionDir[0], axis=0)
+        meetConditionDir=np.where(arrarNumpy[:,0:2]>=1)
+        arrarNumpy=np.delete(arrarNumpy, meetConditionDir[0], axis=0)
+        array=torch.from_numpy(arrarNumpy)
+
+        arrayImage=array
+        # print('array[:,2].max()',array[:,2].max())
+        arrayImage[:,0:2]=array[:,0:2]*self.figureWidth
+        image=torch.zeros(size=(self.figureWidth,self.figureHidth,self.figureTime),dtype=array.dtype)
+        imageTraceDir=torch.floor(arrayImage).long()
+        image[imageTraceDir[:,0],imageTraceDir[:,1],imageTraceDir[:,2]]=255
+        return image
+    def ImageToArray(self,image):
+
+        dix=np.where(image>0)
+        dix=np.array(dix,dtype=float).transpose()
+
+        dix[:,0:1]=dix[:,0:1] /self.figureWidth
+        dix[:,1:2]=dix[:,1:2] /self.figureHidth
+        return dix
+
+    def arrayTranse(self,array):
+        return (self.ImageToArray(self.arrayToImage(array)))
+
+    def injectionNoise(self,numOfNosePoint,traceArray,txtName,openModel='a'):
+        import  os
+        if not os.path.exists(self.dataName):
+            os.makedirs(self.dataName)
+        if(not os.path.exists(self.dataName+txtName)):
+            fileDir = open(self.dataName + txtName, 'w')
+        else:
+            fileDir = open(self.dataName+txtName,openModel)
+
+        for j in range(traceArray.size()[0]):
+            noseArrayOrSave=np.zeros(shape=(0,3))
+            noseArrayOr=np.random.uniform(low=[0,0],high=[1,1],size=(numOfNosePoint,2))#[numOfNosePoint 2]
+            noseArrayOr=np.repeat(noseArrayOr,10,axis=0)#[numOfNosePoint*20 2]
+            for i in range(self.figureTime):
+                noseDir = random.sample(range(noseArrayOr.shape[0]), int(0.1 * noseArrayOr.shape[0]))
+                noseArrayOrnext=np.random.normal(loc=noseArrayOr[noseDir,:],scale=self.noseScale)
+                noseArrayOrnext=np.concatenate((noseArrayOrnext,i*np.ones(shape=(noseArrayOrnext.shape[0],1))),axis=1)
+                noseArrayOrSave=np.concatenate((noseArrayOrSave,noseArrayOrnext),axis=0)
+            noseArrayOrSave=torch.tensor(noseArrayOrSave,dtype=traceArray.dtype)
+            noseArrayOrSave=torch.cat((noseArrayOrSave,traceArray[j]),dim=0)
+
+            ct = time.time()
+            trainDataName = "%s_%3d" % (time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime(ct)), (ct - int(ct)) * 1000)
+            fileNameTrain=str(trainDataName)+'.pt'
+
+            noseArrayOrSave=self.arrayTranse(noseArrayOrSave)
+
+            torch.save(noseArrayOrSave,f=self.trainSavePath+fileNameTrain)
+            torch.save(traceArray[j], f=self.labelSavePath + fileNameTrain)
+            fileDir.write(fileNameTrain+'\n')
+
+        fileDir.close()
+        return noseArrayOrSave
+
+    def xmlWite(self,folder,filename,source,size,):
+        from lxml import etree, objectify
+        E = objectify.ElementMaker(annotate=False)
+        anno_tree = E.annotation(
+            E.folder('VOC2014_instance'),
+            E.filename("test.jpg"),
+            E.source(
+                E.database('COCO'),
+                E.annotation('COCO'),
+                E.image('COCO'),
+                E.url("http://test.jpg")
+            ),
+            E.size(
+                E.width(800),
+                E.height(600),
+                E.depth(3)
+            ),
+            E.segmented(0),
+        )
+        etree.ElementTree(anno_tree).write("text.xml", pretty_print=True)
+
+if __name__=="__main__":
+    a=traceImageProduce(1,sizeFig=128,time=5,
+                        trainSavePath='F:\demo_RadarTracking/data/Images/',
+                        labelSavePaht='F:\demo_RadarTracking/data/Annatations/trace/',
+                        dataNameSavePath='F:\demo_RadarTracking/data/Main/')
+
+    for i in range(128):
+        arr=a.valueTracePro(128)
+        da=a.injectionNoise(20,arr,'128_5_20.txt',openModel='a')
+        a.pltFucRectangle(da)
+
+
+
+
+
+
+
+
+
+
